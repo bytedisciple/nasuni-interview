@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const OS_WORD_SIZE = 4*1024 //4KB is OS word size
+var OS_WORD_SIZE = 4.*1024 //4KB is OS word size
 
 // WORD_CHARACTERS_LIST holds array of bytes for the characters a-zA-Z0-9'-
 var WORD_CHARACTERS_LIST = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'-")
@@ -44,12 +44,15 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 	// Convert to float 64 so we get remainder in following line
 	fileSize := float64(fileInfo.Size())
 	// Round up to get the last buffer that is partially filled
+
+	OS_WORD_SIZE = fileSize
+
 	numberOfFileChunks := int(math.Ceil(fileSize/OS_WORD_SIZE))
 	fileBuffers := make([][]byte, numberOfFileChunks)
 
 	r := bufio.NewReader(file)
 	for i := 0; i < numberOfFileChunks; i++ {
-		buf := make([]byte, OS_WORD_SIZE) //the chunk size
+		buf := make([]byte,  int(math.Ceil(OS_WORD_SIZE))) //the chunk size
 		n, err := r.Read(buf) //loading chunk into buffer
 		if err != nil{
 			return nil, err
@@ -70,14 +73,14 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 
 	matches := make([]string, 0)
 
-
 	for i, buffer := range ts.fileBuffers {
+
 		wordIndex := -1
 		skip := 0
 
 		//Find many matches in a given buffer
 		for{
-			wordIndex = bytes.Index(buffer, []byte(word))
+			wordIndex = bytes.Index(bytes.ToLower(buffer), []byte(strings.ToLower(word)))
 			if wordIndex == -1 {	// Found a match
 				break
 			} else {				// No match in this chunk
@@ -92,23 +95,17 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 					continue
 				}
 
-				prevWords := ts.findPrevWords(i, wordIndex+skip, context)
-				nextWords := ts.findNextWords(i, wordIndex+skip, word, context)
+				prevWords := ts.findPrevWords(i, wordIndex+skip, context + 1)
+				nextWords := ts.findNextWords(i, wordIndex+skip, word, context + 1)
 
 				match := strings.Join(prevWords," ") + word + strings.Join(nextWords, " ")
-				fmt.Println(match)
-				fmt.Printf("%v\n", string(match))
-				replacementCount := strings.Count(match, "\n")
-				fmt.Printf("Replacing %v newline characters\n", replacementCount)
-
-				//match = strings.ReplaceAll(match, "\n", "")
 
 				matches = append(matches, match)
 				skip += wordIndex+len(word)
 				buffer = buffer[wordIndex+len(word):]
 			}
 		}
-		break
+		//break
 	}
 
 	return matches
@@ -119,7 +116,8 @@ func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string
 
 	words := make([]string, numWords)
 
-	bufferAfterWord := bytes.ReplaceAll(ts.fileBuffers[bufferNum][bufferIndex+len(word):], []byte("\n"), []byte(" "))
+	bufferAfterWord := bytes.ReplaceAll(ts.fileBuffers[bufferNum][bufferIndex+len(word):], []byte("\r\n"), []byte(" "))
+	bufferAfterWord = bytes.ReplaceAll(bufferAfterWord, []byte("\n"), []byte(" "))
 	wordsInBytes := bytes.Split(bufferAfterWord, []byte(" "))[0:numWords]
 
 	i := 0
@@ -127,7 +125,6 @@ func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string
 	for i, wordInBytes = range wordsInBytes {
 		words[i] = string(wordInBytes)
 	}
-	fmt.Printf("Next words: %v - %v\n", words, i)
 	return words
 }
 
@@ -135,23 +132,21 @@ func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string
 func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords int) []string {
 	words := make([]string, numWords)
 
-	bufferBeforeWord := bytes.ReplaceAll(ts.fileBuffers[bufferNum][:bufferIndex], []byte("\n"), []byte(" "))
+	bufferBeforeWord := bytes.ReplaceAll(ts.fileBuffers[bufferNum][:bufferIndex], []byte("\r\n"), []byte(" "))
+	bufferBeforeWord = bytes.ReplaceAll(bufferBeforeWord, []byte("\n"), []byte(" "))
 	bufferAsSplitBytes := bytes.Split(bufferBeforeWord, []byte(" "))
 	wordsInBytes := bufferAsSplitBytes[len(bufferAsSplitBytes)-numWords:]
 
 	for i, wordInBytes := range wordsInBytes {
 		words[i] = string(wordInBytes)
 	}
-
-	fmt.Println(words)
-	fmt.Printf("Prev words: %v\n", words)
 	return words
 }
 
 // isExactWord checks if the match is a substring of a word or a stand-alone word
 // throws an error if the outer bound check on the word would result in OutOfBounds error
 func (ts TextSearcher) isExactWord(bufferNum int, word string, index int) (bool, error) {
-	if index-1 < 0 || index+1 > OS_WORD_SIZE{
+	if index-1 < 0 || index+1 >  int(math.Ceil(OS_WORD_SIZE)){
 		return false, fmt.Errorf("out of bounds of OS_WORD_SIZE buffer")
 	}
 
