@@ -76,7 +76,7 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 	for i, buffer := range ts.fileBuffers {
 
 		wordIndex := -1
-		skip := 0
+		skip := 0	//We trim the local scope buffer as we search. Remember offset into full chunk for reading full
 
 		//Find many matches in a given buffer
 		for{
@@ -94,11 +94,11 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 					buffer = buffer[wordIndex+len(word):]
 					continue
 				}
+				prevWords := ts.findPrevWords(i, wordIndex+skip, context)
+				nextWords := ts.findNextWords(i, wordIndex+skip, word, context)
 
-				prevWords := ts.findPrevWords(i, wordIndex+skip, context + 1)
-				nextWords := ts.findNextWords(i, wordIndex+skip, word, context + 1)
-
-				match := strings.Join(prevWords," ") + word + strings.Join(nextWords, " ")
+				match := fmt.Sprintf("%v%v%v", prevWords, word, nextWords)
+				//match := strings.Join(prevWords," ") + word + strings.Join(nextWords, " ")
 
 				matches = append(matches, match)
 				skip += wordIndex+len(word)
@@ -112,35 +112,45 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 }
 
 // findNextWords gets the next N words after a given index in a buffer
-func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string, numWords int) []string{
+func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string, numWords int) string{
 
 	words := make([]string, numWords)
 
-	bufferAfterWord := bytes.ReplaceAll(ts.fileBuffers[bufferNum][bufferIndex+len(word):], []byte("\r\n"), []byte(" "))
-	bufferAfterWord = bytes.ReplaceAll(bufferAfterWord, []byte("\n"), []byte(" "))
-	wordsInBytes := bytes.Split(bufferAfterWord, []byte(" "))[0:numWords]
+	bufferAfterWord := removeReturnCharacters(ts.fileBuffers[bufferNum][bufferIndex+len(word):])
+	wordsInBytes := bytes.Fields(bufferAfterWord)[0:numWords]
 
-	i := 0
-	var wordInBytes []byte
-	for i, wordInBytes = range wordsInBytes {
-		words[i] = string(wordInBytes)
+	if bytes.Equal(wordsInBytes[0], []byte("\"")){
+		return "\"" + ts.findNextWords(bufferNum, bufferIndex + 1, word, numWords)
 	}
-	return words
-}
-
-// findPrevWords gets the previous N words after a given index in a buffer
-func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords int) []string {
-	words := make([]string, numWords)
-
-	bufferBeforeWord := bytes.ReplaceAll(ts.fileBuffers[bufferNum][:bufferIndex], []byte("\r\n"), []byte(" "))
-	bufferBeforeWord = bytes.ReplaceAll(bufferBeforeWord, []byte("\n"), []byte(" "))
-	bufferAsSplitBytes := bytes.Split(bufferBeforeWord, []byte(" "))
-	wordsInBytes := bufferAsSplitBytes[len(bufferAsSplitBytes)-numWords:]
 
 	for i, wordInBytes := range wordsInBytes {
 		words[i] = string(wordInBytes)
 	}
-	return words
+	return " " + strings.Join(words, " ")
+}
+
+// findPrevWords gets the previous N words after a given index in a buffer
+func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords int) string {
+	words := make([]string, numWords)
+
+	bufferBeforeWord := removeReturnCharacters(ts.fileBuffers[bufferNum][:bufferIndex])
+
+	bufferAsSplitBytes := bytes.Fields(bufferBeforeWord)
+	wordsInBytes := bufferAsSplitBytes[len(bufferAsSplitBytes)-numWords:]
+
+
+
+	if bytes.Equal(wordsInBytes[0], []byte("\"")){
+		return ts.findPrevWords(bufferNum, bufferIndex-1, numWords) + "\""
+	}
+
+	for i, wordInBytes := range wordsInBytes {
+		words[i] = string(wordInBytes)
+	}
+
+	//fmt.Printf("%v\n", strings.Join(words, " "))
+
+	return strings.Join(words, " ") + " "
 }
 
 // isExactWord checks if the match is a substring of a word or a stand-alone word
@@ -160,5 +170,39 @@ func (ts TextSearcher) isExactWord(bufferNum int, word string, index int) (bool,
 	}
 
 	return true, nil
+}
 
+// adjustIndex adjusted the index of the provided word in the situation where a non-whitespace non-character-word
+// prepends the search team.
+func (ts TextSearcher) adjustIndex(bufferNum int, word string, index int) (adjustedWord string, indexAdjustment int, err error) {
+	adjustedWord = word
+	indexAdjustment = 0
+
+	offset := 1
+
+	for{
+		if index-offset < 0 {
+			return word, index, fmt.Errorf("out of bounds of OS_WORD_SIZE buffer")
+		}
+
+		byteBeforeWord := ts.fileBuffers[bufferNum][index-offset]
+		if bytes.ContainsRune(WORD_CHARACTERS_LIST, rune(byteBeforeWord)){
+			// We have hit a new word
+			return
+		} else if rune(byteBeforeWord) == ' '{
+			return
+		} else {
+			indexAdjustment--
+			adjustedWord = string(byteBeforeWord) + adjustedWord
+		}
+
+		offset++
+	}
+}
+
+
+func removeReturnCharacters(buf []byte) []byte{
+	buf = bytes.ReplaceAll(buf, []byte("\r\n"), []byte(" "))
+	buf = bytes.ReplaceAll(buf, []byte("\n"), []byte(" "))
+	return buf
 }
