@@ -18,7 +18,7 @@ func main() {
 	ts, _ := text.NewSearcher(args[0])
 
 	// Use the TextSearcher to return all the matches with their context
-	for i, match := range ts.Search("Early", 1) {
+	for i, match := range ts.Search("in", 1) {
 		fmt.Printf("%d: %s\n", i, match)
 	}
 

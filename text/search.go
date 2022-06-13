@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"unicode"
 )
 
 var OS_WORD_SIZE = 4.*1024 //4KB is OS word size
@@ -25,6 +26,8 @@ type TextSearcher struct {
 // TODO: Load/process the file so that the Search function work
 func NewSearcher(filePath string) (*TextSearcher, error) {
 
+	unicode.CaseRanges
+
 	// Credit to https://medium.com/swlh/processing-16gb-file-in-seconds-go-lang-3982c235dfa2
 	// for an efficient file reading scheme using buffer readers
 
@@ -32,6 +35,8 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 	if err != nil {
 		return nil, err
 	}
+
+
 
 	// UPDATE: close after checking error
 	defer file.Close()  //Do not forget to close the file
@@ -87,6 +92,7 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 
 				exactMatch, err := ts.isExactWord(i, word, wordIndex+skip)
 				if err != nil {
+					fmt.Printf(err.Error())
 					break
 				}
 				if exactMatch == false {
@@ -94,10 +100,19 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 					buffer = buffer[wordIndex+len(word):]
 					continue
 				}
-				prevWords := ts.findPrevWords(i, wordIndex+skip, context)
-				nextWords := ts.findNextWords(i, wordIndex+skip, word, context)
 
-				match := fmt.Sprintf("%v%v%v", prevWords, word, nextWords)
+				prevWords := ""
+				nextWords := ""
+
+				if context > 0 {
+					prevWords = ts.findPrevWords(i, wordIndex+skip, context)
+					nextWords = ts.findNextWords(i, wordIndex+skip + len(word), context)
+				}
+
+
+				match := fmt.Sprintf("%v%v%v", prevWords,
+					string(ts.fileBuffers[i][wordIndex+skip:wordIndex+skip +len(word)]),
+					nextWords)
 				//match := strings.Join(prevWords," ") + word + strings.Join(nextWords, " ")
 
 				matches = append(matches, match)
@@ -112,17 +127,27 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 }
 
 // findNextWords gets the next N words after a given index in a buffer
-func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string, numWords int) string{
+func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, numWords int) string{
 
-	words := make([]string, numWords)
+	bufferAfterWord := removeReturnCharacters(ts.fileBuffers[bufferNum][bufferIndex:])
+	bufferAsSplitBytes := bytes.Fields(bufferAfterWord)
 
-	bufferAfterWord := removeReturnCharacters(ts.fileBuffers[bufferNum][bufferIndex+len(word):])
-	wordsInBytes := bytes.Fields(bufferAfterWord)[0:numWords]
+	// Limit the number of previous words if we are at the beginning of the file to what we can grab
+	numWords = minInt(len(bufferAsSplitBytes), numWords)
 
-	if bytes.Equal(wordsInBytes[0], []byte("\"")){
-		return "\"" + ts.findNextWords(bufferNum, bufferIndex + 1, word, numWords)
+	wordsInBytes := bufferAsSplitBytes[0:numWords]
+
+	if len(wordsInBytes) == 0 {
+		return ""
 	}
 
+	for _, b := range []byte("\".") {
+		if bytes.Equal(wordsInBytes[0], []byte{b}){
+			return string(b) + ts.findNextWords(bufferNum, bufferIndex+1, numWords)
+		}
+	}
+
+	words := make([]string, numWords)
 	for i, wordInBytes := range wordsInBytes {
 		words[i] = string(wordInBytes)
 	}
@@ -131,19 +156,25 @@ func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, word string
 
 // findPrevWords gets the previous N words after a given index in a buffer
 func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords int) string {
-	words := make([]string, numWords)
 
 	bufferBeforeWord := removeReturnCharacters(ts.fileBuffers[bufferNum][:bufferIndex])
 
 	bufferAsSplitBytes := bytes.Fields(bufferBeforeWord)
+	// Limit the number of previous words if we are at the beginning of the file to what we can grab
+	numWords = minInt(len(bufferAsSplitBytes), numWords)
 	wordsInBytes := bufferAsSplitBytes[len(bufferAsSplitBytes)-numWords:]
 
-
+	if len(wordsInBytes) == 0 {
+		return ""
+	}
 
 	if bytes.Equal(wordsInBytes[0], []byte("\"")){
 		return ts.findPrevWords(bufferNum, bufferIndex-1, numWords) + "\""
 	}
 
+	
+
+	words := make([]string, numWords)
 	for i, wordInBytes := range wordsInBytes {
 		words[i] = string(wordInBytes)
 	}
@@ -156,6 +187,12 @@ func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords in
 // isExactWord checks if the match is a substring of a word or a stand-alone word
 // throws an error if the outer bound check on the word would result in OutOfBounds error
 func (ts TextSearcher) isExactWord(bufferNum int, word string, index int) (bool, error) {
+
+	if (bufferNum == 0 && index == 0)  ||
+		(bufferNum == len(ts.fileBuffers) && index+len(word) == int(OS_WORD_SIZE)){
+		return true, nil
+	}
+
 	if index-1 < 0 || index+1 >  int(math.Ceil(OS_WORD_SIZE)){
 		return false, fmt.Errorf("out of bounds of OS_WORD_SIZE buffer")
 	}
@@ -205,4 +242,13 @@ func removeReturnCharacters(buf []byte) []byte{
 	buf = bytes.ReplaceAll(buf, []byte("\r\n"), []byte(" "))
 	buf = bytes.ReplaceAll(buf, []byte("\n"), []byte(" "))
 	return buf
+}
+
+//minInt is a simple helper to compare ints since math package only has Min function for floats
+func minInt(x,y int) int{
+	if x < y {
+		return x
+	} else {
+		return y
+	}
 }
