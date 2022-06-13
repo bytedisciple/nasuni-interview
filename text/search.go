@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"strings"
-	"unicode"
 )
 
 var OS_WORD_SIZE = 4.*1024 //4KB is OS word size
@@ -25,8 +24,6 @@ type TextSearcher struct {
 // NewSearcher returns a TextSearcher from the given file
 // TODO: Load/process the file so that the Search function work
 func NewSearcher(filePath string) (*TextSearcher, error) {
-
-	unicode.CaseRanges
 
 	// Credit to https://medium.com/swlh/processing-16gb-file-in-seconds-go-lang-3982c235dfa2
 	// for an efficient file reading scheme using buffer readers
