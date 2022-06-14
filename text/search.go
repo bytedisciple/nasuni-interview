@@ -16,14 +16,15 @@ var chunkSize = 4.*1024 //4KB is OS word size
 var WordCharactersList = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'-")
 
 // TextSearcher structure
-// TODO: add in objects/data structures required by the Search function
+// This implementation reads the chunk in 4kb chunks and does the search in parallel.
+// It creates a 'fencepost chunk' in between all 4kb chunks of a variable size depending on context size.
+// The fencepost chunks solve the situation where a match is found across two separate chunks.
 type TextSearcher struct {
 	maxWordSizeInBytes int
 	fileBuffers [][]byte 		// 4KB chunks of file
 }
 
 // NewSearcher returns a TextSearcher from the given file
-// TODO: Load/process the file so that the Search function work
 func NewSearcher(filePath string) (*TextSearcher, error) {
 
 	file, err := os.Open(filePath)
@@ -138,7 +139,7 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 
 	wg.Wait()
 
-	//Flatten the [][]string into just a []string
+	// @TODO potentially duplicates from fencepost chunks
 	flatMatches := make([]string, 0)
 	for _, match := range matches {
 		flatMatches = append(flatMatches, match...)
