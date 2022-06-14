@@ -10,10 +10,11 @@ import (
 	"sync"
 )
 
-var chunkSize = 4.*1024 //4KB is OS word size
+var chunkSize = 4*1024 //4KB is OS word size
 
-// WordCharactersList holds array of bytes for the characters a-zA-Z0-9'-
-var WordCharactersList = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'-")
+// wordCharactersList holds array of bytes for the characters a-zA-Z0-9'-
+var wordCharactersList = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'-")
+var punctuationList = []byte("\".,!?(){}[]") //Potentially incomplete list
 
 // TextSearcher structure
 // This implementation reads the chunk in 4kb chunks and does the search in parallel.
@@ -43,12 +44,12 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 	fileSize := float64(fileInfo.Size())
 
 	// Round up to get the last buffer that is partially filled
-	numberOfFileChunks := int(math.Ceil(fileSize/ chunkSize))
+	numberOfFileChunks := int(math.Ceil(fileSize/ float64(chunkSize)))
 	fileBuffers := make([][]byte, numberOfFileChunks)
 
 	r := bufio.NewReader(file)
 	for i := 0; i < numberOfFileChunks; i++ {
-		buf := make([]byte,  int(math.Ceil(chunkSize)))
+		buf := make([]byte,  int(math.Ceil(float64(chunkSize))))
 		n, err := r.Read(buf)
 		if err != nil{
 			return nil, err
@@ -165,7 +166,7 @@ func (ts TextSearcher) findNextWords(bufferNum int, bufferIndex int, numWords in
 		false, bufferNum, bufferIndex, numWords)
 }
 
-// findPrevWords gets the previous N words after a given index in a buffer
+// findPrevWords gets the previous N words before a given index in a buffer
 func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords int) string {
 	return ts.findContext(
 		removeReturnCharacters(ts.fileBuffers[bufferNum][:bufferIndex]),
@@ -173,8 +174,8 @@ func (ts TextSearcher) findPrevWords(bufferNum int, bufferIndex int, numWords in
 }
 
 // findContext gets N words from the left or right of our search term.
-func (ts TextSearcher) findContext(bufferBeforeWord []byte, prev bool, bufferNum int, bufferIndex int, numWords int) string  {
-	bufferAsSplitBytes := bytes.Fields(bufferBeforeWord)
+func (ts TextSearcher) findContext(bufferAsideWord []byte, prev bool, bufferNum int, bufferIndex int, numWords int) string  {
+	bufferAsSplitBytes := bytes.Fields(bufferAsideWord) //Like split(" ") but handled many spaces in a row
 	numWords = minInt(len(bufferAsSplitBytes), numWords)
 
 	var wordsInBytes [][]byte
@@ -185,24 +186,24 @@ func (ts TextSearcher) findContext(bufferBeforeWord []byte, prev bool, bufferNum
 		wordsInBytes = bufferAsSplitBytes[0:numWords]
 	}
 
+	// Nothing left to read in the buffer. We are at the end or beginning of the file.
 	if len(wordsInBytes) == 0 {
 		return ""
 	}
 
-	if prev {
-		for _, b := range []byte("\".") {
-			if bytes.Equal(wordsInBytes[0], []byte{b}){
-				return ts.findContext(removeReturnCharacters(ts.fileBuffers[bufferNum][:bufferIndex-1]), prev, bufferNum, bufferIndex, numWords) + string(b)
-			}
-		}
-	} else {
-		for _, b := range []byte("\".") {
-			if bytes.Equal(wordsInBytes[0], []byte{b}){
+	// Our search term may be padded with some punctuation. If unhandled, it will be treated as a word.
+	//	recurse, but move the pointer and trim the buffer of the punctuation.
+	for _, b := range punctuationList {
+		if bytes.Equal(wordsInBytes[0], []byte{b}){
+			if prev{
+				return ts.findContext(removeReturnCharacters(ts.fileBuffers[bufferNum][:bufferIndex-1]), prev, bufferNum, bufferIndex-1, numWords) + string(b)
+			} else {
 				return string(b) + ts.findContext(removeReturnCharacters(ts.fileBuffers[bufferNum][bufferIndex+1:]), prev, bufferNum, bufferIndex+1, numWords)
 			}
 		}
 	}
 
+	// Convert to []string to later strings.Join
 	words := make([]string, numWords)
 	for i, wordInBytes := range wordsInBytes {
 		words[i] = string(wordInBytes)
@@ -219,12 +220,26 @@ func (ts TextSearcher) findContext(bufferBeforeWord []byte, prev bool, bufferNum
 // throws an error if the outer bound check on the word would result in OutOfBounds error
 func (ts TextSearcher) isExactWord(bufferNum int, word string, index int) (bool, error) {
 
-	if (bufferNum == 0 && index == 0)  ||
-		(bufferNum == len(ts.fileBuffers) && index+len(word) == int(chunkSize)){
-		return true, nil
+	// If the match starts at the beginning of the file, only check to the right of the word
+	if bufferNum == 0 && index == 0 {
+		if bytes.ContainsRune(wordCharactersList, rune(ts.fileBuffers[bufferNum][len(word)])){
+			return false, nil
+		} else {
+			return true, nil
+		}
+	} else
+	// If the match is contains the last char in the file, only check to the left of the word
+	if bufferNum == len(ts.fileBuffers) && index+len(word) == int(chunkSize) {
+		if bytes.ContainsRune(wordCharactersList, rune(ts.fileBuffers[bufferNum][len(word)])){
+			return false, nil
+		} else {
+			return true, nil
+		}
 	}
 
-	if index-1 < 0 || index+1 >  int(math.Ceil(chunkSize)){
+	// We will throw an error if we are in middle chunks and can't read to the left or right.
+	//	Fenceposts will handle this.
+	if index-1 < 0 || index+1 >  int(math.Ceil(float64(chunkSize))){
 		return false, fmt.Errorf("out of bounds of OS_WORD_SIZE buffer")
 	}
 
@@ -232,40 +247,12 @@ func (ts TextSearcher) isExactWord(bufferNum int, word string, index int) (bool,
 	byteAfterWord := ts.fileBuffers[bufferNum][index + len(word)]
 
 	//If the byte before or after the word is a word-character a-zA-Z0-9'-
-	if bytes.ContainsRune(WordCharactersList, rune(byteBeforeWord)) ||
-		bytes.ContainsRune(WordCharactersList, rune(byteAfterWord)) {
+	if bytes.ContainsRune(wordCharactersList, rune(byteBeforeWord)) ||
+		bytes.ContainsRune(wordCharactersList, rune(byteAfterWord)) {
 		return false, nil
 	}
 
 	return true, nil
-}
-
-// adjustIndex adjusted the index of the provided word in the situation where a non-whitespace non-character-word
-// prepends the search team.
-func (ts TextSearcher) adjustIndex(bufferNum int, word string, index int) (adjustedWord string, indexAdjustment int, err error) {
-	adjustedWord = word
-	indexAdjustment = 0
-
-	offset := 1
-
-	for{
-		if index-offset < 0 {
-			return word, index, fmt.Errorf("out of bounds of OS_WORD_SIZE buffer")
-		}
-
-		byteBeforeWord := ts.fileBuffers[bufferNum][index-offset]
-		if bytes.ContainsRune(WordCharactersList, rune(byteBeforeWord)){
-			// We have hit a new word
-			return
-		} else if rune(byteBeforeWord) == ' '{
-			return
-		} else {
-			indexAdjustment--
-			adjustedWord = string(byteBeforeWord) + adjustedWord
-		}
-
-		offset++
-	}
 }
 
 // removeReturnCharacters removes new line characters and carriage returns which cause lots of chaos
