@@ -58,17 +58,35 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 		fileBuffers[i] = buf
 	}
 
+	fileBuffersWithFencePosts := make([][]byte, (numberOfFileChunks*2)-1)
+
+	for i, _ := range fileBuffersWithFencePosts {
+		if i % 2 == 0{
+			fileBuffersWithFencePosts[i] = fileBuffers[(i/2)]
+		}
+	}
+
 	return &TextSearcher{
-		fileBuffers: fileBuffers,
+		fileBuffers: fileBuffersWithFencePosts,
 		maxWordSizeInBytes: 20,
 	}, nil
 }
 
 // Search searches the file loaded when NewSearcher was called for the given word and
 // returns a list of matches surrounded by the given number of context words
-// TODO: Implement this function to pass the tests in search_test.go
 func (ts *TextSearcher) Search(word string, context int) []string {
 
+	sizeEitherSideFencepost := context * ts.maxWordSizeInBytes
+
+	for i := range ts.fileBuffers {
+		if i % 2 != 0 {
+			firstHalfPost := ts.fileBuffers[i-1]
+			secondHalfPost := ts.fileBuffers[i+1]
+			ts.fileBuffers[i] = append(
+				firstHalfPost[len(firstHalfPost)-sizeEitherSideFencepost:],
+				secondHalfPost[0:sizeEitherSideFencepost]...)
+		}
+	}
 	var wg sync.WaitGroup
 
 	matches := make([][]string, len(ts.fileBuffers))
@@ -90,7 +108,6 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 
 					exactMatch, err := ts.isExactWord(i, word, wordIndex+skip)
 					if err != nil {
-						fmt.Printf(err.Error())
 						break
 					}
 					if exactMatch == false {
@@ -121,9 +138,8 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 
 	wg.Wait()
 
+	//Flatten the [][]string into just a []string
 	flatMatches := make([]string, 0)
-
-	//@TODO combine [][]string into []string with maintained order
 	for _, match := range matches {
 		flatMatches = append(flatMatches, match...)
 	}
