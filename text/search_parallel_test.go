@@ -6,6 +6,7 @@ import (
 )
 
 // Unit tests specifically for parallel search. Provided unit tests were incomplete given a parallelized solution.
+// Obviously this file is also incomplete, but just demonstrating this should be tested.
 
 func TestParallelSearch(t *testing.T) {
 	t.Run("Match across chunks", func(t *testing.T) {

@@ -32,7 +32,7 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 		return nil, err
 	}
 
-	defer file.Close()  //Do not forget to close the file
+	defer file.Close()  //Don't forget to close the file
 
 	fileInfo, err := file.Stat()
 	if err!= nil{
@@ -41,8 +41,6 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 
 	// Convert to float 64 so we get remainder in following line
 	fileSize := float64(fileInfo.Size())
-
-	//chunkSize = fileSize
 
 	// Round up to get the last buffer that is partially filled
 	numberOfFileChunks := int(math.Ceil(fileSize/ chunkSize))
@@ -77,8 +75,13 @@ func NewSearcher(filePath string) (*TextSearcher, error) {
 // returns a list of matches surrounded by the given number of context words
 func (ts *TextSearcher) Search(word string, context int) []string {
 
+	// Intelligently select the size of the fencepost chunk
+	// Assuming a generous 20 characters per word average, multipied by `context`
+	// 	should give you at least `context` words on either side
 	sizeEitherSideFencepost := context * ts.maxWordSizeInBytes
 
+	// Actually put the fencepost's data in place. 20*context bytes from the end of one chunk and
+	//	20*context bytes from the beginning of the next.
 	for i := range ts.fileBuffers {
 		if i % 2 != 0 {
 			firstHalfPost := ts.fileBuffers[i-1]
@@ -88,6 +91,7 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 				secondHalfPost[0:sizeEitherSideFencepost]...)
 		}
 	}
+
 	var wg sync.WaitGroup
 
 	matches := make([][]string, len(ts.fileBuffers))
@@ -102,34 +106,41 @@ func (ts *TextSearcher) Search(word string, context int) []string {
 
 			//Find many matches in a given buffer
 			for{
+				// Convert
 				wordIndex = bytes.Index(bytes.ToLower(buffer), []byte(strings.ToLower(word)))
-				if wordIndex == -1 {	// Found a match
+				if wordIndex == -1 {
 					break
-				} else {				// No match in this chunk
+				} else {
 
+					// Check if the match is just a substring or an exact match
 					exactMatch, err := ts.isExactWord(i, word, wordIndex+skip)
 					if err != nil {
 						break
 					}
+					// Move the cursor forward even, if it wasnt an exact match
 					if exactMatch == false {
 						skip += wordIndex+len(word)
 						buffer = buffer[wordIndex+len(word):]
 						continue
 					}
 
+					// Default context strings to empty string in case context=0
 					prevWords := ""
 					nextWords := ""
-
 					if context > 0 {
 						prevWords = ts.findPrevWords(i, wordIndex+skip, context)
 						nextWords = ts.findNextWords(i, wordIndex+skip + len(word), context)
 					}
 
-					match := fmt.Sprintf("%v%v%v", prevWords,
-						string(ts.fileBuffers[i][wordIndex+skip:wordIndex+skip +len(word)]),
+					match := fmt.Sprintf("%v%v%v",
+						prevWords,
+						//Regrab the search term from the buffer to restore capitalization
+						string(ts.fileBuffers[i][wordIndex+skip:wordIndex+skip+len(word)]),
 						nextWords)
 
 					matches[i] = append(matches[i], match)
+
+					// Move the 'cursor' forward. If not done bytes.Index will find the same match
 					skip += wordIndex+len(word)
 					buffer = buffer[wordIndex+len(word):]
 				}
